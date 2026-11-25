@@ -40,13 +40,32 @@ Open `report.html` in a browser. Failure screenshots and traces are stored in `t
 
 ## Docker and CI status
 
-The verified Toolshop source and Compose configuration are not present in this repository. Docker cannot currently be started from this project. Supply the official Toolshop deployment source and a verified `docker-compose.toolshop.yml` with its required configuration and seed data; do not add secrets. Inspect services and ports with `docker compose -f docker-compose.toolshop.yml config`, start with `docker compose -f docker-compose.toolshop.yml up -d`, and stop with `docker compose -f docker-compose.toolshop.yml down`.
+CI checks out the official [Toolshop repository](https://github.com/testsmith-io/practice-software-testing) at release 2.5 (`9e7736c3841ec2bbb9a6822c9e6602353b7b9a65`) into a separate directory. Its license permits private, internal, non-commercial use and restricts public redistribution; review the upstream LICENSE before use. Do not commit or publish the upstream checkout. The development Compose files provide Angular, Laravel, nginx, MariaDB, Composer, MailCatcher, cron and phpMyAdmin. `docker/compose.ci.yml` mounts the same API source into nginx, so it can serve Laravel's public directory.
 
-Set repository Actions variables `TOOLSHOP_BASE_URL` and `TOOLSHOP_API_URL` to the actual UI and API URLs exposed on `localhost` or `127.0.0.1` on the runner. The workflow validates these URLs and waits for the UI and `/brands` API. Browser-facing API configuration and CORS must match the deployment. Ports and service names must be verified from the supplied source.
+Install [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/) and start its Linux container engine. From the project directory, a local disposable deployment can be prepared in PowerShell:
+
+```powershell
+git clone --branch 2.5 https://github.com/testsmith-io/practice-software-testing.git .toolshop-upstream
+$toolshopDir = (Resolve-Path .toolshop-upstream).Path
+$env:SPRINT = 'sprint5'
+$env:COMPOSE_PROJECT_NAME = 'toolshop-local'
+$env:COMPOSE_FILE = "$toolshopDir\docker-compose.yml;$toolshopDir\docker-compose.override.yml;$PWD\docker\compose.ci.yml"
+docker compose --project-directory $toolshopDir config
+docker compose --project-directory $toolshopDir up -d --build
+docker wait (docker compose --project-directory $toolshopDir ps -a -q composer)
+# Once MariaDB is ready, initialize its disposable database:
+docker compose --project-directory $toolshopDir exec -T laravel-api php artisan migrate --seed --force
+$env:BASE_URL = 'http://localhost:4200'
+$env:API_URL = 'http://localhost:8091'
+python -m pytest --browser chromium
+docker compose --project-directory $toolshopDir down
+```
+
+Wait until the UI and `$env:API_URL/brands` respond before testing. The first build and Angular dependency installation can take several minutes. The upstream seed creates brands, users, categories, images, products, specifications, favorites, invoices and payments. The UI is at `http://localhost:4200`, the API at `http://localhost:8091`, MailCatcher at `http://localhost:1080` and MariaDB at port `3306`. These are local test services and upstream default credentials must not be used for production. `down` does not delete named volumes. Use a fresh isolated Docker project for a clean seed.
 
 The workflow runs the full suite for Chromium, Firefox and WebKit with two workers per job and one retry. Two workers limit runner and Docker load; one retry helps identify intermittent failures but a rerun is not proof of stability. Investigate `RERUN` results. Local `-n 4` remains available. Reports and failure artifacts are uploaded even on failure. The workflow has not been run on GitHub Actions.
 
-The suite includes a `buggy` hash-route navigation test and a GitHub footer navigation test. Verify the supplied deployment supports that route and the footer test can reach GitHub. PROD API assertions also assume current response types and seed data. Run all three browsers against the actual deployment and address evidenced contract differences without weakening assertions.
+Neither the Docker setup nor the three browser jobs have been executed here. The suite includes a `buggy` hash-route navigation test, while this stack starts Sprint 5 PROD; the test forces BUGGY route settings and may fail against PROD. The GitHub footer test also needs access to GitHub. Verify these constraints, current API contracts, seed data, failure traces and all three browser jobs against the actual deployment without weakening assertions. Docker logs can contain test data and are uploaded on failure; review artifact access and contents.
 
 ## GitHub setup and pull requests
 

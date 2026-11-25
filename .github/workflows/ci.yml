@@ -12,18 +12,27 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         browser: [chromium, firefox, webkit]
     env:
       TEST_ENV: prod
-      BASE_URL: ${{ vars.TOOLSHOP_BASE_URL }}
-      API_URL: ${{ vars.TOOLSHOP_API_URL }}
-      COMPOSE_FILE: docker-compose.toolshop.yml
+      BASE_URL: http://localhost:4200
+      API_URL: http://localhost:8091
+      SPRINT: sprint5
+      COMPOSE_PROJECT_NAME: toolshop-ci
+      TOOLSHOP_DIR: ${{ github.workspace }}/.toolshop-upstream
+      COMPOSE_FILE: ${{ github.workspace }}/.toolshop-upstream/docker-compose.yml:${{ github.workspace }}/.toolshop-upstream/docker-compose.override.yml:${{ github.workspace }}/docker/compose.ci.yml
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout official Toolshop 2.5
+        uses: actions/checkout@v4
+        with:
+          repository: testsmith-io/practice-software-testing
+          ref: 9e7736c3841ec2bbb9a6822c9e6602353b7b9a65
+          path: .toolshop-upstream
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -32,16 +41,24 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Install browser and system dependencies
         run: python -m playwright install --with-deps ${{ matrix.browser }}
-      - name: Validate local deployment configuration
+      - name: Validate Compose configuration
+        run: docker compose --project-directory "$TOOLSHOP_DIR" config --quiet
+      - name: Start Toolshop
+        run: docker compose --project-directory "$TOOLSHOP_DIR" up -d --build
+      - name: Wait for Composer and seed database
         shell: bash
         run: |
-          test -f "$COMPOSE_FILE" || { echo 'Missing verified Toolshop Compose file'; exit 1; }
-          for url in "$BASE_URL" "$API_URL"; do
-            [[ "$url" =~ ^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?(/.*)?$ ]] || { echo 'Toolshop URLs must point to the local runner'; exit 1; }
+          compose=(docker compose --project-directory "$TOOLSHOP_DIR")
+          composer_id=$("${compose[@]}" ps --all -q composer)
+          test -n "$composer_id"
+          test "$(docker wait "$composer_id")" = 0 || { "${compose[@]}" logs composer; exit 1; }
+          ready=false
+          for attempt in {1..60}; do
+            if "${compose[@]}" exec -T mariadb mysqladmin ping -h 127.0.0.1 -u root -proot --silent > /dev/null 2>&1; then ready=true; break; fi
+            sleep 2
           done
-          docker compose -f "$COMPOSE_FILE" config --quiet
-      - name: Start Toolshop
-        run: docker compose -f "$COMPOSE_FILE" up -d
+          "$ready" || { "${compose[@]}" logs; exit 1; }
+          "${compose[@]}" exec -T laravel-api php artisan migrate --seed --force
       - name: Wait for UI and API readiness
         shell: bash
         run: |
@@ -51,13 +68,20 @@ jobs:
               if curl --fail --silent --show-error --max-time 5 "$url" > /dev/null; then ready=true; break; fi
               sleep 2
             done
-            "$ready" || { echo "Service not ready: $url"; docker compose -f "$COMPOSE_FILE" logs; exit 1; }
+            "$ready" || { echo "Service not ready: $url"; docker compose --project-directory "$TOOLSHOP_DIR" logs; exit 1; }
           done
       - name: Run full suite
         run: >-
           python -m pytest --browser ${{ matrix.browser }} -n 2 --reruns 1
           --html=report.html --self-contained-html
           --tracing=retain-on-failure --screenshot=only-on-failure
+      - name: Capture Docker logs
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f "$TOOLSHOP_DIR/docker-compose.yml" ]; then
+            docker compose --project-directory "$TOOLSHOP_DIR" logs --no-color > docker-logs.txt || true
+          fi
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -66,10 +90,11 @@ jobs:
           path: |
             report.html
             test-results/
+            docker-logs.txt
           if-no-files-found: warn
           retention-days: 7
       - name: Stop Toolshop
         if: always()
         shell: bash
         run: |
-          if [ -f "$COMPOSE_FILE" ]; then docker compose -f "$COMPOSE_FILE" down; fi
+          if [ -f "$TOOLSHOP_DIR/docker-compose.yml" ]; then docker compose --project-directory "$TOOLSHOP_DIR" down; fi
