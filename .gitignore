@@ -1,0 +1,33 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+env/
+.env
+
+# Test output and Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+report.html
+reports/
+artifacts/
+trace.zip
+
+# IDE and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Authentication and sensitive test data
+.auth/
+playwright/.auth/
+*storage_state*.json

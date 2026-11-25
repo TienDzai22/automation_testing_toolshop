@@ -1,0 +1,75 @@
+name: Toolshop tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    env:
+      TEST_ENV: prod
+      BASE_URL: ${{ vars.TOOLSHOP_BASE_URL }}
+      API_URL: ${{ vars.TOOLSHOP_API_URL }}
+      COMPOSE_FILE: docker-compose.toolshop.yml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Install browser and system dependencies
+        run: python -m playwright install --with-deps ${{ matrix.browser }}
+      - name: Validate local deployment configuration
+        shell: bash
+        run: |
+          test -f "$COMPOSE_FILE" || { echo 'Missing verified Toolshop Compose file'; exit 1; }
+          for url in "$BASE_URL" "$API_URL"; do
+            [[ "$url" =~ ^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?(/.*)?$ ]] || { echo 'Toolshop URLs must point to the local runner'; exit 1; }
+          done
+          docker compose -f "$COMPOSE_FILE" config --quiet
+      - name: Start Toolshop
+        run: docker compose -f "$COMPOSE_FILE" up -d
+      - name: Wait for UI and API readiness
+        shell: bash
+        run: |
+          for url in "$BASE_URL" "$API_URL/brands"; do
+            ready=false
+            for attempt in {1..60}; do
+              if curl --fail --silent --show-error --max-time 5 "$url" > /dev/null; then ready=true; break; fi
+              sleep 2
+            done
+            "$ready" || { echo "Service not ready: $url"; docker compose -f "$COMPOSE_FILE" logs; exit 1; }
+          done
+      - name: Run full suite
+        run: >-
+          python -m pytest --browser ${{ matrix.browser }} -n 2 --reruns 1
+          --html=report.html --self-contained-html
+          --tracing=retain-on-failure --screenshot=only-on-failure
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence-${{ matrix.browser }}
+          path: |
+            report.html
+            test-results/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Stop Toolshop
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$COMPOSE_FILE" ]; then docker compose -f "$COMPOSE_FILE" down; fi

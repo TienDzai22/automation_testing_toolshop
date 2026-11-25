@@ -1,0 +1,10 @@
+[
+  {
+    "query": "hammer",
+    "expected_name_fragment": "hammer"
+  },
+  {
+    "query": "pliers",
+    "expected_name_fragment": "pliers"
+  }
+]
