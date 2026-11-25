@@ -1,0 +1,6 @@
+# Merge with the official development and override Compose files.
+# Nginx needs the same application files mounted by the Laravel service.
+services:
+  web:
+    volumes:
+      - ./sprint5/API:/var/www:cached

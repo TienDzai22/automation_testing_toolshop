@@ -31,3 +31,7 @@ Thumbs.db
 .auth/
 playwright/.auth/
 *storage_state*.json
+
+# Separate upstream checkout; do not redistribute its source.
+.toolshop-upstream/
+docker-logs.txt
